@@ -1,0 +1,22 @@
+@import "tailwindcss";
+
+html {
+  color-scheme: light dark;
+}
+
+.intro p + p,
+.intro p + ul,
+.intro ul + p {
+  margin-top: 0.5rem;
+}
+.intro ul {
+  list-style: disc;
+  padding-left: 1.25rem;
+}
+.intro code {
+  font-family: ui-monospace, monospace;
+  font-size: 0.875em;
+  padding: 0.1em 0.3em;
+  border-radius: 0.25rem;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
