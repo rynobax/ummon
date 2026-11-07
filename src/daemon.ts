@@ -7,7 +7,6 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { inboxFromEnv } from "./inbox.ts";
 import { BUILD_ID, type ServerState } from "./server.ts";
-import type { Workspace } from "./shared/types.ts";
 
 /**
  * How the CLI finds, starts, and talks to the shared ummon server.
@@ -64,17 +63,9 @@ export async function stopServer(origin: string): Promise<boolean> {
 }
 
 /** Reads a running server's workspaces and threads, so a replacement can pick them up. */
-async function exportState(origin: string): Promise<ServerState> {
+async function exportState(origin: string): Promise<ServerState | null> {
   const response = await post(origin, "/api/state/export", {}).catch(() => null);
-  if (response?.ok) return (await response.json()) as ServerState;
-  // Servers from before export existed only list workspaces.
-  const workspaces = await fetch(`${origin}/api/workspaces`)
-    .then((r) => r.json() as Promise<Workspace[]>)
-    .catch(() => []);
-  return {
-    registrations: workspaces.map(({ id, path, base, registeredAt }) => ({ id, path, base, registeredAt })),
-    threads: [],
-  };
+  return response?.ok ? ((await response.json()) as ServerState) : null;
 }
 
 export function isInstalled(): boolean {
