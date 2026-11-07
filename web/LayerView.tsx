@@ -1,9 +1,34 @@
+import type { DiffLineAnnotation, SelectedLineRange } from "@pierre/diffs";
 import { PatchDiff } from "@pierre/diffs/react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import Markdown from "react-markdown";
-import type { Layer, StackFile, TestChanges } from "../src/shared/types.ts";
+import type { Layer, StackFile, TestChanges, Thread, ThreadAnchor } from "../src/shared/types.ts";
+import { DraftView, ThreadView, type ThreadActions } from "./Threads.tsx";
 
-export type DiffStyle = "split" | "unified";
+/** "dynamic" picks split or unified per file; see `wantsSplit`. */
+export type DiffStyle = "dynamic" | "split" | "unified";
+
+/**
+ * True if the patch has a block where two or more lines are replaced by two
+ * or more lines. Those read better side by side; pure additions, pure
+ * deletions and one-line swaps read better unified.
+ */
+export function wantsSplit(patch: string): boolean {
+  let deleted = 0;
+  let added = 0;
+  let inHunks = false;
+  for (const line of patch.split("\n")) {
+    if (line.startsWith("@@")) inHunks = true;
+    if (!inHunks || line.startsWith("\\")) continue; // "\ No newline at end of file"
+    if (line.startsWith("-")) deleted++;
+    else if (line.startsWith("+")) added++;
+    else {
+      if (deleted >= 2 && added >= 2) return true;
+      deleted = added = 0;
+    }
+  }
+  return deleted >= 2 && added >= 2;
+}
 type Tab = "source" | "tests" | "testSummary";
 
 interface Props {
@@ -11,9 +36,14 @@ interface Props {
   index: number;
   total: number;
   diffStyle: DiffStyle;
+  /** Threads on this layer. */
+  threads: Thread[];
+  /** Whether questions can be asked: a Claude Code session is connected. */
+  connected: boolean;
+  actions: ThreadActions;
 }
 
-export function LayerView({ layer, index, total, diffStyle }: Props) {
+export function LayerView({ layer, index, total, diffStyle, threads, connected, actions }: Props) {
   const source = layer.files.filter((file) => !file.isTest);
   const tests = layer.files.filter((file) => file.isTest);
   const [tab, setTab] = useState<Tab>(source.length > 0 ? "source" : "tests");
@@ -67,7 +97,15 @@ export function LayerView({ layer, index, total, diffStyle }: Props) {
       ) : (
         <div className="space-y-3">
           {shown.map((file) => (
-            <FileView key={file.path} file={file} diffStyle={diffStyle} />
+            <FileView
+              key={file.path}
+              file={file}
+              layerSha={layer.sha}
+              diffStyle={diffStyle}
+              threads={threads.filter((t) => t.path === file.path)}
+              connected={connected}
+              actions={actions}
+            />
           ))}
         </div>
       )}
@@ -75,7 +113,66 @@ export function LayerView({ layer, index, total, diffStyle }: Props) {
   );
 }
 
-function FileView({ file, diffStyle }: { file: StackFile; diffStyle: DiffStyle }) {
+type Annotation = { threadId: string } | { draft: true };
+
+interface FileViewProps {
+  file: StackFile;
+  layerSha: string | null;
+  diffStyle: DiffStyle;
+  threads: Thread[];
+  connected: boolean;
+  actions: ThreadActions;
+}
+
+function FileView({ file, layerSha, diffStyle, threads, connected, actions }: FileViewProps) {
+  const [draft, setDraft] = useState<ThreadAnchor | null>(null);
+
+  const options = useMemo(
+    () => ({
+      diffStyle: diffStyle === "dynamic" ? (wantsSplit(file.patch) ? ("split" as const) : ("unified" as const)) : diffStyle,
+      themeType: "system" as const,
+      overflow: "wrap" as const,
+      // The "+" button beside each line; drag it to select several lines.
+      enableGutterUtility: connected,
+      onGutterUtilityClick: (range: SelectedLineRange) =>
+        setDraft({
+          layerSha,
+          path: file.path,
+          side: range.side ?? "additions",
+          start: Math.min(range.start, range.end),
+          end: Math.max(range.start, range.end),
+        }),
+    }),
+    [diffStyle, connected, layerSha, file.path, file.patch],
+  );
+
+  const annotations = useMemo(() => {
+    const list: DiffLineAnnotation<Annotation>[] = threads.map((t) => ({
+      side: t.side,
+      lineNumber: t.end,
+      metadata: { threadId: t.id },
+    }));
+    if (draft) list.push({ side: draft.side, lineNumber: draft.end, metadata: { draft: true } });
+    return list;
+  }, [threads, draft]);
+
+  const renderAnnotation = (annotation: DiffLineAnnotation<Annotation>) => {
+    const { metadata } = annotation;
+    if ("draft" in metadata) {
+      return (
+        <DraftView
+          onAsk={async (text) => {
+            await actions.ask(draft!, text);
+            setDraft(null);
+          }}
+          onCancel={() => setDraft(null)}
+        />
+      );
+    }
+    const thread = threads.find((t) => t.id === metadata.threadId);
+    return thread ? <ThreadView thread={thread} onFollowUp={(text) => actions.followUp(thread.id, text)} /> : null;
+  };
+
   // Binary, mode-only and pure-rename changes have no hunks to render.
   if (!file.patch.includes("\n@@")) {
     const what = file.oldPath ? `Renamed from ${file.oldPath}` : "No text changes";
@@ -87,7 +184,12 @@ function FileView({ file, diffStyle }: { file: StackFile; diffStyle: DiffStyle }
   }
   return (
     <div className="overflow-hidden rounded border border-neutral-200 dark:border-neutral-800">
-      <PatchDiff patch={file.patch} options={{ diffStyle, themeType: "system", overflow: "wrap" }} />
+      <PatchDiff<Annotation, undefined>
+        patch={file.patch}
+        options={options}
+        lineAnnotations={annotations}
+        renderAnnotation={renderAnnotation}
+      />
     </div>
   );
 }

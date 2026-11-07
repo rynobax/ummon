@@ -1,6 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Stack } from "../src/shared/types.ts";
+import type { Stack, Workspace } from "../src/shared/types.ts";
 import { LayerView, type DiffStyle } from "./LayerView.tsx";
+import { useThreads } from "./Threads.tsx";
+
+/** Whether the workspace's Claude Code session can take questions. Rechecked on focus, since rerunning `ummon` connects it. */
+function useConnected(workspaceId: string): boolean {
+  const [connected, setConnected] = useState(false);
+  useEffect(() => {
+    const load = () =>
+      fetch("/api/workspaces")
+        .then((r) => r.json() as Promise<Workspace[]>)
+        .then((list) => setConnected(list.find((w) => w.id === workspaceId)?.connected ?? false))
+        .catch(() => {});
+    load();
+    window.addEventListener("focus", load);
+    return () => window.removeEventListener("focus", load);
+  }, [workspaceId]);
+  return connected;
+}
+
+const POLL_MS = 2000;
 
 function useStack(workspaceId: string) {
   const [stack, setStack] = useState<Stack | null>(null);
@@ -23,20 +42,18 @@ function useStack(workspaceId: string) {
     }
   }, [workspaceId]);
 
+  // Poll while the tab is visible, so commits, restacks and edits show up on their own.
   useEffect(() => {
     load();
+    const timer = setInterval(() => document.visibilityState === "visible" && load(), POLL_MS);
     window.addEventListener("focus", load);
-    return () => window.removeEventListener("focus", load);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("focus", load);
+    };
   }, [load]);
 
-  // Poll while a restack is running so the layers appear as they're committed.
-  useEffect(() => {
-    if (!stack?.restackInProgress) return;
-    const timer = setInterval(load, 2000);
-    return () => clearInterval(timer);
-  }, [stack?.restackInProgress, load]);
-
-  return { stack, error, reload: load };
+  return { stack, error };
 }
 
 /**
@@ -62,14 +79,15 @@ function useSelectedLayerFromHash(): number {
 }
 
 export function Review({ workspaceId }: { workspaceId: string }) {
-  const { stack, error, reload } = useStack(workspaceId);
+  const { stack, error } = useStack(workspaceId);
   const selectedFromHash = useSelectedLayerFromHash();
+  const { threads, actions } = useThreads(workspaceId);
+  const connected = useConnected(workspaceId);
   const [diffStyle, setDiffStyle] = useState<DiffStyle>(
-    () => (localStorage.getItem("ummon.diffStyle") as DiffStyle | null) ?? "split",
+    () => (localStorage.getItem("ummon.diffStyle") as DiffStyle | null) ?? "dynamic",
   );
 
-  const toggleDiffStyle = () => {
-    const next = diffStyle === "split" ? "unified" : "split";
+  const chooseDiffStyle = (next: DiffStyle) => {
     localStorage.setItem("ummon.diffStyle", next);
     setDiffStyle(next);
   };
@@ -115,18 +133,28 @@ export function Review({ workspaceId }: { workspaceId: string }) {
             >
               <span className="w-5 shrink-0 text-right font-mono text-neutral-400">{index + 1}</span>
               <span className="leading-snug">{layer.title}</span>
+              <ThreadCount count={threads.filter((t) => t.layerSha === layer.sha).length} />
             </a>
           ))}
         </nav>
 
-        <div className="mt-6 flex gap-2 text-xs">
-          <button onClick={toggleDiffStyle} className="rounded border border-neutral-300 px-2 py-1 dark:border-neutral-700">
-            {diffStyle === "split" ? "Unified" : "Split"}
-          </button>
-          <button onClick={reload} className="rounded border border-neutral-300 px-2 py-1 dark:border-neutral-700">
-            Refresh
-          </button>
+        <div className="mt-6 inline-flex overflow-hidden rounded border border-neutral-300 text-xs dark:border-neutral-700">
+          {(["dynamic", "unified", "split"] as const).map((style) => (
+            <button
+              key={style}
+              onClick={() => chooseDiffStyle(style)}
+              title={style === "dynamic" ? "Split for files that replace blocks of lines, unified otherwise" : undefined}
+              className={`px-2 py-1 capitalize ${style === diffStyle ? "bg-neutral-200 font-medium dark:bg-neutral-800" : "text-neutral-500"}`}
+            >
+              {style}
+            </button>
+          ))}
         </div>
+        {!connected && (
+          <div className="mt-6 text-xs text-neutral-500">
+            To ask questions on the diff, run <code>ummon</code> from this workspace's Claude Code session.
+          </div>
+        )}
         {error && <div className="mt-4 text-xs text-red-600">{error}</div>}
       </aside>
 
@@ -143,11 +171,23 @@ export function Review({ workspaceId }: { workspaceId: string }) {
             index={selected}
             total={stack.layers.length}
             diffStyle={diffStyle}
+            threads={threads.filter((t) => t.layerSha === current.sha)}
+            connected={connected}
+            actions={actions}
           />
         ) : (
           <div className="text-sm text-neutral-500">No changes</div>
         )}
       </main>
     </div>
+  );
+}
+
+function ThreadCount({ count }: { count: number }) {
+  if (count === 0) return null;
+  return (
+    <span className="ml-auto shrink-0 rounded-full bg-neutral-300 px-1.5 text-xs leading-5 dark:bg-neutral-700" title="Questions">
+      {count}
+    </span>
   );
 }

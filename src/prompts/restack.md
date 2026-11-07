@@ -30,6 +30,7 @@ git diff {{base}} {{head}}
 ## Commit messages
 
 - Subject: the layer title. Imperative, under 72 characters.
+- Write both for a person: Speak plainly, like one human to another. Prioritize conciseness and simplicity of language.
 - Body: the intro. Two to five sentences of markdown for the reviewer. Say what the layer does and why, and point at what deserves scrutiny: tricky logic, behaviour changes, risky edges. Don't list the files; the reviewer sees them.
 
 ## Mechanics

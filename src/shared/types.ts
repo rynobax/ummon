@@ -41,6 +41,36 @@ export interface Workspace {
   base?: string;
   branch: string | null;
   registeredAt: string;
+  /** Whether the Claude Code session that registered this workspace can be messaged. */
+  connected: boolean;
+}
+
+export type Side = "additions" | "deletions";
+
+/** Where a thread sits: a line range on one side of a file's diff in one layer. */
+export interface ThreadAnchor {
+  /** Commit sha of the layer, or null for the uncommitted-changes layer. */
+  layerSha: string | null;
+  path: string;
+  side: Side;
+  start: number;
+  end: number;
+}
+
+export interface ThreadMessage {
+  from: "reviewer" | "session";
+  text: string;
+  at: string;
+}
+
+/** A question asked on the diff, answered by the workspace's Claude Code session. */
+export interface Thread extends ThreadAnchor {
+  id: string;
+  messages: ThreadMessage[];
+  /** True from a reviewer message until the session replies. */
+  waiting: boolean;
+  /** Why the last message couldn't be delivered, if it couldn't. */
+  error?: string;
 }
 
 export interface Stack {

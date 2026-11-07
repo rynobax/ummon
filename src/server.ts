@@ -1,13 +1,15 @@
 import { serve } from "@hono/node-server";
 import { Hono, type Context } from "hono";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gitMaybe } from "./git.ts";
-import type { Workspace } from "./shared/types.ts";
+import { postToInbox, type Inbox } from "./inbox.ts";
+import type { Thread, ThreadAnchor, Workspace } from "./shared/types.ts";
 import { readStack, resolveRepo } from "./stack.ts";
+import { followUpMessage, questionMessage } from "./threads.ts";
 
 /**
  * One ummon server serves every workspace. `ummon` registers the current
@@ -43,6 +45,18 @@ interface Registration {
   path: string;
   base?: string;
   registeredAt: string;
+  /** The inbox of the Claude Code session that ran `ummon`. Never sent to the browser. */
+  inbox?: Inbox;
+}
+
+interface StoredThread extends Thread {
+  workspaceId: string;
+}
+
+/** Everything the server holds, so the CLI can carry it over when it replaces a stale server. */
+export interface ServerState {
+  registrations: Registration[];
+  threads: StoredThread[];
 }
 
 export function workspaceId(path: string): string {
@@ -62,12 +76,28 @@ function isTrustedWrite(c: Context): boolean {
 }
 
 /**
- * Workspaces are held in memory only. The server is often started from a
- * sandboxed Claude Code session that can't write outside its own temp
- * folder, and when the CLI replaces a stale server it carries the list over.
+ * Workspaces and threads are held in memory only. The server may run in a
+ * sandbox that can't write outside its own temp folder, and when the CLI
+ * replaces a stale server it carries the state over.
  */
 export function createApp() {
   const registrations = new Map<string, Registration>();
+  const threads = new Map<string, StoredThread>();
+
+  /** Sends a reviewer message to the workspace's session, recording on the thread whether that worked. */
+  async function deliver(thread: StoredThread, message: () => Promise<string>) {
+    const inbox = registrations.get(thread.workspaceId)?.inbox;
+    try {
+      if (!inbox) throw new Error("No Claude Code session is connected. Run `ummon` from one to connect it.");
+      await postToInbox(inbox, await message());
+      thread.error = undefined;
+    } catch (error) {
+      thread.waiting = false;
+      thread.error = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  const publicThread = ({ workspaceId: _, ...thread }: StoredThread): Thread => thread;
 
   const app = new Hono();
   app.onError((error, c) => c.text(error.message, 500));
@@ -82,9 +112,9 @@ export function createApp() {
 
   app.post("/api/workspaces", async (c) => {
     if (!isTrustedWrite(c)) return c.text("Forbidden", 403);
-    const { path, base } = await c.req.json<{ path: string; base?: string }>();
+    const { path, base, inbox } = await c.req.json<{ path: string; base?: string; inbox?: Inbox }>();
     const repo = await resolveRepo(path);
-    const registration = { id: workspaceId(repo), path: repo, base, registeredAt: new Date().toISOString() };
+    const registration = { id: workspaceId(repo), path: repo, base, inbox, registeredAt: new Date().toISOString() };
     registrations.set(registration.id, registration);
     return c.json({ id: registration.id });
   });
@@ -98,6 +128,7 @@ export function createApp() {
         base: r.base,
         branch: await gitMaybe(r.path, ["symbolic-ref", "--short", "-q", "HEAD"]),
         registeredAt: r.registeredAt,
+        connected: r.inbox !== undefined,
       })),
     );
     workspaces.sort((a, b) => b.registeredAt.localeCompare(a.registeredAt));
@@ -108,6 +139,59 @@ export function createApp() {
     const registration = registrations.get(c.req.param("id"));
     if (!registration) return c.text("Unknown workspace. Run `ummon` in it to register it.", 404);
     return c.json(await readStack(registration.path, registration.base));
+  });
+
+  app.get("/api/workspaces/:id/threads", (c) => {
+    const id = c.req.param("id");
+    return c.json([...threads.values()].filter((t) => t.workspaceId === id).map(publicThread));
+  });
+
+  app.post("/api/workspaces/:id/threads", async (c) => {
+    if (!isTrustedWrite(c)) return c.text("Forbidden", 403);
+    const registration = registrations.get(c.req.param("id"));
+    if (!registration) return c.text("Unknown workspace.", 404);
+    const { anchor, text } = await c.req.json<{ anchor: ThreadAnchor; text: string }>();
+    const { layerSha, path, side, start, end } = anchor;
+    const thread: StoredThread = {
+      id: randomUUID().slice(0, 8),
+      workspaceId: registration.id,
+      layerSha, path, side, start, end,
+      messages: [{ from: "reviewer", text, at: new Date().toISOString() }],
+      waiting: true,
+    };
+    threads.set(thread.id, thread);
+    await deliver(thread, async () => questionMessage(await readStack(registration.path, registration.base), thread, text));
+    return c.json(publicThread(thread));
+  });
+
+  /** Messages on a thread: `from: "reviewer"` from the page, `from: "session"` from `ummon reply`. */
+  app.post("/api/threads/:id/messages", async (c) => {
+    if (!isTrustedWrite(c)) return c.text("Forbidden", 403);
+    const thread = threads.get(c.req.param("id"));
+    if (!thread) return c.text("Unknown thread. It may have been lost when the ummon server restarted.", 404);
+    const { from, text } = await c.req.json<{ from: "reviewer" | "session"; text: string }>();
+    thread.messages.push({ from, text, at: new Date().toISOString() });
+    if (from === "session") {
+      thread.waiting = false;
+      thread.error = undefined;
+    } else {
+      thread.waiting = true;
+      await deliver(thread, async () => followUpMessage(thread, text));
+    }
+    return c.json(publicThread(thread));
+  });
+
+  app.post("/api/state/export", (c) => {
+    if (!isTrustedWrite(c)) return c.text("Forbidden", 403);
+    return c.json({ registrations: [...registrations.values()], threads: [...threads.values()] } satisfies ServerState);
+  });
+
+  app.post("/api/state/import", async (c) => {
+    if (!isTrustedWrite(c)) return c.text("Forbidden", 403);
+    const state = await c.req.json<ServerState>();
+    for (const r of state.registrations) if (!registrations.has(r.id)) registrations.set(r.id, r);
+    for (const t of state.threads) if (!threads.has(t.id)) threads.set(t.id, t);
+    return c.json({ ok: true });
   });
 
   app.get("*", async (c) => {

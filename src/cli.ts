@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 import { restackWithAgent } from "./agent.ts";
 import { abortRestack, beginRestack, finishRestack, restackGuide } from "./restack.ts";
-import { ensureServer, registerWorkspace, stopServer } from "./daemon.ts";
+import { ensureServer, install, isInstalled, registerWorkspace, replyToThread, stopServer, uninstall } from "./daemon.ts";
 import { DEFAULT_PORT, runServer } from "./server.ts";
 import { resolveRepo } from "./stack.ts";
 
@@ -16,12 +16,18 @@ Usage:
   ummon restack begin [--base <ref>]              Start a manual restack and print the guide
   ummon restack finish                            Verify a manual restack and move the branch
   ummon restack abort                             Abandon a restack and restore the branch
+  ummon reply <thread>                            Answer a reviewer's question, reading markdown from stdin
   ummon guide                                     Print the review workflow for a coding agent
+  ummon install                                   Run the ummon server with launchd (macOS)
+  ummon uninstall                                 Stop running the server with launchd
   ummon stop                                      Stop the ummon server
   ummon serve                                     Run the ummon server in the foreground
 
 One ummon server on port ${DEFAULT_PORT} (or --port) serves every workspace. Running
 \`ummon\` starts it if needed and registers the current workspace with it.
+Run from a Claude Code session, it also connects that session, so questions
+asked on the diff are sent to it. That needs a server outside the session's
+sandbox: run \`ummon install\` once in your own terminal.
 The base defaults to the branch this one is stacked on, if any, otherwise the
 merge-base with origin/HEAD (or main/master).
 Every restack backs up the original head under refs/ummon/backup/. Backups of
@@ -51,6 +57,13 @@ function openBrowser(url: string) {
     .on("exit", (code) => code !== 0 && failed());
 }
 
+async function readStdin(): Promise<string> {
+  if (process.stdin.isTTY) return "";
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 async function main() {
   const [command, subcommand] = positionals;
   if (values.help || command === "help") return console.log(HELP);
@@ -59,17 +72,36 @@ async function main() {
   }
 
   const port = Number(values.port);
+  const origin = `http://localhost:${port}`;
   if (command === "serve") return runServer(port);
   if (command === "stop") {
-    const stopped = await stopServer(`http://localhost:${port}`);
+    if (isInstalled()) return console.log("The ummon server runs under launchd. Run `ummon uninstall` to stop it.");
+    const stopped = await stopServer(origin);
     return console.log(stopped ? "Stopped the ummon server." : "No ummon server is running.");
+  }
+  if (command === "install") {
+    await install(port);
+    return console.log(`The ummon server now runs under launchd at ${origin}, and starts when you log in.`);
+  }
+  if (command === "uninstall") {
+    return console.log((await uninstall()) ? "Removed the ummon launch agent and stopped its server." : "ummon isn't installed.");
+  }
+  if (command === "reply") {
+    if (!subcommand) throw new Error("Usage: ummon reply <thread> <<'EOF' ... EOF");
+    const text = positionals.length > 2 ? positionals.slice(2).join(" ") : await readStdin();
+    if (!text.trim()) throw new Error("The reply is empty. Pass it on stdin.");
+    await replyToThread(origin, subcommand, text.trim());
+    return console.log("Sent your reply to the reviewer.");
   }
 
   const repo = await resolveRepo(process.cwd());
 
   if (command === undefined) {
-    const url = await registerWorkspace(await ensureServer(port), repo, values.base);
+    const { url, connected } = await registerWorkspace(await ensureServer(port), repo, values.base);
     console.log(`ummon is reviewing ${repo} at ${url}`);
+    if (connected) {
+      console.log("Questions the reviewer asks on the diff will arrive in this Claude Code session as messages starting with [ummon].");
+    }
     if (!values["no-open"]) openBrowser(url);
     return;
   }

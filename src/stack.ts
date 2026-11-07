@@ -93,13 +93,7 @@ export async function readStack(repo: string, baseOverride?: string): Promise<St
     .filter(Boolean);
 
   const layers: Layer[] = [];
-  for (const sha of shas) {
-    const meta = await git(repo, ["show", "-s", "--format=%s%x00%b", sha]);
-    const [title, intro = ""] = meta.split("\0");
-    const patch = await git(repo, ["diff", "-M", "--no-color", "--no-ext-diff", `${sha}^1`, sha]);
-    const files = await withTestSummaries(repo, splitPatch(patch), `${sha}^1`, sha);
-    layers.push({ sha, kind: "commit", title: title.trim(), intro: intro.trim(), files });
-  }
+  for (const sha of shas) layers.push(await commitLayer(repo, sha));
 
   if (!restack) {
     const files = await uncommittedChanges(repo);
@@ -109,6 +103,26 @@ export async function readStack(repo: string, baseOverride?: string): Promise<St
   }
 
   return { ...range, restackInProgress: restack !== null, layers };
+}
+
+/**
+ * A commit's layer never changes, so each is built once. That keeps the page's
+ * polling cheap: only the uncommitted changes are diffed every time.
+ */
+const commitLayers = new Map<string, Layer>();
+const MAX_CACHED_LAYERS = 5000;
+
+async function commitLayer(repo: string, sha: string): Promise<Layer> {
+  const cached = commitLayers.get(sha);
+  if (cached) return cached;
+  const meta = await git(repo, ["show", "-s", "--format=%s%x00%b", sha]);
+  const [title, intro = ""] = meta.split("\0");
+  const patch = await git(repo, ["diff", "-M", "--no-color", "--no-ext-diff", `${sha}^1`, sha]);
+  const files = await withTestSummaries(repo, splitPatch(patch), `${sha}^1`, sha);
+  const layer: Layer = { sha, kind: "commit", title: title.trim(), intro: intro.trim(), files };
+  if (commitLayers.size >= MAX_CACHED_LAYERS) commitLayers.clear();
+  commitLayers.set(sha, layer);
+  return layer;
 }
 
 /**
