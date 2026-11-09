@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Workspace } from "../src/shared/types.ts";
+import { repoName } from "./Review.tsx";
 
 export function WorkspaceList() {
   const [workspaces, setWorkspaces] = useState<Workspace[] | null>(null);
@@ -30,7 +31,10 @@ export function WorkspaceList() {
               href={`/w/${workspace.id}`}
               className="block rounded px-3 py-2 hover:bg-neutral-200/60 dark:hover:bg-neutral-800/60"
             >
-              <div className="text-sm font-medium">{workspace.branch ?? "detached HEAD"}</div>
+              <div className="text-sm">
+                <span className="text-neutral-500">{repoName(workspace.path)} /</span>{" "}
+                <span className="font-medium">{workspace.branch ?? "detached HEAD"}</span>
+              </div>
               <div className="truncate font-mono text-xs text-neutral-500">{workspace.path}</div>
             </a>
           </li>

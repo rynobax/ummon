@@ -115,6 +115,8 @@ export function Review({ workspaceId }: { workspaceId: string }) {
           ummon
         </a>
         <div className="mt-1 truncate font-mono text-xs text-neutral-500" title={stack.repo}>
+          <span className="text-neutral-700 dark:text-neutral-300">{repoName(stack.repo)}</span>
+          {" / "}
           {stack.branch ?? stack.headSha.slice(0, 12)}
         </div>
         <div className="font-mono text-xs text-neutral-500">from {stack.baseRef.slice(0, 40)}</div>
@@ -181,6 +183,11 @@ export function Review({ workspaceId }: { workspaceId: string }) {
       </main>
     </div>
   );
+}
+
+/** The repo's directory name, which tells apart workspaces on the same branch in different repos. */
+export function repoName(path: string): string {
+  return path.split("/").filter(Boolean).at(-1) ?? path;
 }
 
 function ThreadCount({ count }: { count: number }) {
