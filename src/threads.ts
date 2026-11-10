@@ -15,7 +15,7 @@ export function questionMessage(stack: Stack, thread: Thread, question: string):
   const excerpt = file ? diffExcerpt(file.patch, thread.side, thread.start, thread.end) : "";
 
   return [
-    `[ummon] The reviewer asked a question about this branch in ummon.`,
+    `[ummon] The reviewer asked a question about this branch in ummon. The reviewer is the user you're working with.`,
     ``,
     where,
     `${thread.path}, ${describeLines(thread)}`,
