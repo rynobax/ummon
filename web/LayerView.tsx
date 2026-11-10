@@ -126,6 +126,12 @@ interface FileViewProps {
 
 function FileView({ file, layerSha, diffStyle, threads, connected, actions }: FileViewProps) {
   const [draft, setDraft] = useState<ThreadAnchor | null>(null);
+  // The highlighted lines: the drag in progress, then the draft's range. Kept here so closing the draft clears it.
+  const [selection, setSelection] = useState<SelectedLineRange | null>(null);
+  const closeDraft = () => {
+    setDraft(null);
+    setSelection(null);
+  };
 
   const options = useMemo(
     () => ({
@@ -134,14 +140,17 @@ function FileView({ file, layerSha, diffStyle, threads, connected, actions }: Fi
       overflow: "wrap" as const,
       // The "+" button beside each line; drag it to select several lines.
       enableGutterUtility: connected,
-      onGutterUtilityClick: (range: SelectedLineRange) =>
+      onLineSelectionChange: setSelection,
+      onGutterUtilityClick: (range: SelectedLineRange) => {
+        setSelection(range);
         setDraft({
           layerSha,
           path: file.path,
           side: range.side ?? "additions",
           start: Math.min(range.start, range.end),
           end: Math.max(range.start, range.end),
-        }),
+        });
+      },
     }),
     [diffStyle, connected, layerSha, file.path, file.patch],
   );
@@ -163,9 +172,9 @@ function FileView({ file, layerSha, diffStyle, threads, connected, actions }: Fi
         <DraftView
           onAsk={async (text) => {
             await actions.ask(draft!, text);
-            setDraft(null);
+            closeDraft();
           }}
-          onCancel={() => setDraft(null)}
+          onCancel={closeDraft}
         />
       );
     }
@@ -187,6 +196,7 @@ function FileView({ file, layerSha, diffStyle, threads, connected, actions }: Fi
       <PatchDiff<Annotation, undefined>
         patch={file.patch}
         options={options}
+        selectedLines={selection}
         lineAnnotations={annotations}
         renderAnnotation={renderAnnotation}
       />

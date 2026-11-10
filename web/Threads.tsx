@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import type { Thread, ThreadAnchor } from "../src/shared/types.ts";
 
@@ -128,6 +128,14 @@ function Composer({
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const textarea = useRef<HTMLTextAreaElement>(null);
+
+  // `autoFocus` alone misses: the diff mounts annotations before attaching them to the page.
+  useEffect(() => {
+    if (!autoFocus) return;
+    const frame = requestAnimationFrame(() => textarea.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [autoFocus]);
 
   const submit = async () => {
     if (!text.trim() || sending) return;
@@ -149,11 +157,14 @@ function Composer({
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submit();
+          if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+            e.preventDefault();
+            submit();
+          }
           if (e.key === "Escape") onCancel?.();
         }}
         placeholder={placeholder}
-        autoFocus={autoFocus}
+        ref={textarea}
         rows={2}
         className="w-full resize-y rounded border border-neutral-300 bg-transparent px-2 py-1 text-sm dark:border-neutral-700"
       />
@@ -170,7 +181,7 @@ function Composer({
             Cancel
           </button>
         )}
-        <span className="text-neutral-400">⌘↵</span>
+        <span className="text-neutral-400">⇧↵ for a new line</span>
         {error && <span className="text-red-600">{error}</span>}
       </div>
     </div>
