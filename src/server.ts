@@ -1,5 +1,6 @@
 import { serve } from "@hono/node-server";
 import { Hono, type Context } from "hono";
+import { streamSSE } from "hono/streaming";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
@@ -83,6 +84,16 @@ function isTrustedWrite(c: Context): boolean {
 export function createApp() {
   const registrations = new Map<string, Registration>();
   const threads = new Map<string, StoredThread>();
+  /** Open thread streams, each told when a workspace's threads change. */
+  const watchers = new Set<{ workspaceId: string; send: () => void }>();
+
+  const publicThread = ({ workspaceId: _, ...thread }: StoredThread): Thread => thread;
+  const threadsOf = (workspaceId: string) =>
+    [...threads.values()].filter((t) => t.workspaceId === workspaceId).map(publicThread);
+
+  function threadsChanged(workspaceId: string) {
+    for (const watcher of watchers) if (watcher.workspaceId === workspaceId) watcher.send();
+  }
 
   /** Sends a reviewer message to the workspace's session, recording on the thread whether that worked. */
   async function deliver(thread: StoredThread, message: () => Promise<string>) {
@@ -96,8 +107,6 @@ export function createApp() {
       thread.error = error instanceof Error ? error.message : String(error);
     }
   }
-
-  const publicThread = ({ workspaceId: _, ...thread }: StoredThread): Thread => thread;
 
   const app = new Hono();
   app.onError((error, c) => c.text(error.message, 500));
@@ -141,9 +150,16 @@ export function createApp() {
     return c.json(await readStack(registration.path, registration.base));
   });
 
-  app.get("/api/workspaces/:id/threads", (c) => {
-    const id = c.req.param("id");
-    return c.json([...threads.values()].filter((t) => t.workspaceId === id).map(publicThread));
+  /** Sends the workspace's threads on connect, then again whenever they change. */
+  app.get("/api/workspaces/:id/threads/events", (c) => {
+    const workspaceId = c.req.param("id");
+    return streamSSE(c, async (stream) => {
+      const watcher = { workspaceId, send: () => void stream.writeSSE({ data: JSON.stringify(threadsOf(workspaceId)) }) };
+      watchers.add(watcher);
+      watcher.send();
+      await new Promise<void>((resolve) => stream.onAbort(resolve));
+      watchers.delete(watcher);
+    });
   });
 
   app.post("/api/workspaces/:id/threads", async (c) => {
@@ -161,6 +177,7 @@ export function createApp() {
     };
     threads.set(thread.id, thread);
     await deliver(thread, async () => questionMessage(await readStack(registration.path, registration.base), thread, text));
+    threadsChanged(thread.workspaceId);
     return c.json(publicThread(thread));
   });
 
@@ -178,6 +195,7 @@ export function createApp() {
       thread.waiting = true;
       await deliver(thread, async () => followUpMessage(thread, text));
     }
+    threadsChanged(thread.workspaceId);
     return c.json(publicThread(thread));
   });
 
@@ -191,6 +209,7 @@ export function createApp() {
     const state = await c.req.json<ServerState>();
     for (const r of state.registrations) if (!registrations.has(r.id)) registrations.set(r.id, r);
     for (const t of state.threads) if (!threads.has(t.id)) threads.set(t.id, t);
+    for (const id of new Set(state.threads.map((t) => t.workspaceId))) threadsChanged(id);
     return c.json({ ok: true });
   });
 

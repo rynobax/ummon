@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import Markdown from "react-markdown";
 import type { Thread, ThreadAnchor } from "../src/shared/types.ts";
 
@@ -21,40 +21,20 @@ export interface ThreadActions {
 
 export function useThreads(workspaceId: string): { threads: Thread[]; actions: ThreadActions } {
   const [threads, setThreads] = useState<Thread[]>([]);
-  const lastBody = useRef("");
 
-  const load = useCallback(async () => {
-    const response = await fetch(`/api/workspaces/${workspaceId}/threads`).catch(() => null);
-    if (!response?.ok) return;
-    const body = await response.text();
-    if (body !== lastBody.current) {
-      lastBody.current = body;
-      setThreads(JSON.parse(body));
-    }
+  // The server sends every thread on connect and again on each change. EventSource reconnects on its own.
+  useEffect(() => {
+    const events = new EventSource(`/api/workspaces/${workspaceId}/threads/events`);
+    events.onmessage = (event) => setThreads(JSON.parse(event.data));
+    return () => events.close();
   }, [workspaceId]);
-
-  useEffect(() => {
-    load();
-    window.addEventListener("focus", load);
-    return () => window.removeEventListener("focus", load);
-  }, [load]);
-
-  // Poll while the session is working on an answer.
-  const waiting = threads.some((t) => t.waiting);
-  useEffect(() => {
-    if (!waiting) return;
-    const timer = setInterval(load, 2000);
-    return () => clearInterval(timer);
-  }, [waiting, load]);
 
   const actions: ThreadActions = {
     async ask(anchor, text) {
       await postJson(`/api/workspaces/${workspaceId}/threads`, { anchor, text });
-      await load();
     },
     async followUp(threadId, text) {
       await postJson(`/api/threads/${threadId}/messages`, { from: "reviewer", text });
-      await load();
     },
   };
   return { threads, actions };
