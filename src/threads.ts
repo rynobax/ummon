@@ -46,7 +46,7 @@ function replyInstructions(threadId: string): string {
     `<your answer>`,
     `EOF`,
     ``,
-    `The reviewer only sees what you send with \`ummon reply\`. If they ask for a change, make it, then reply with what you changed.`,
+    `The reviewer only sees what you send with \`ummon reply\`. If they ask for a change, make it, then reply with what you changed. No need to repeat the reply here.`,
     `Speak plainly, like one human to another. Prioritize conciseness and simplicity of language.`,
   ].join("\n");
 }
