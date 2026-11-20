@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import type { Thread, ThreadAnchor } from "../src/shared/types.ts";
 
 /** Questions on the diff, answered by the workspace's Claude Code session. */
@@ -84,7 +85,7 @@ export function ThreadView({ thread, onFollowUp }: { thread: Thread; onFollowUp:
           <div key={i}>
             <div className="mb-0.5 text-xs font-medium text-neutral-500">{message.from === "reviewer" ? "You" : "Claude"}</div>
             <div className="intro text-sm leading-relaxed">
-              <Markdown>{message.text}</Markdown>
+              <Markdown remarkPlugins={[remarkGfm]}>{message.text}</Markdown>
             </div>
           </div>
         ))}

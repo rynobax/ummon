@@ -2,6 +2,7 @@ import type { DiffLineAnnotation, SelectedLineRange } from "@pierre/diffs";
 import { PatchDiff } from "@pierre/diffs/react";
 import { useMemo, useState } from "react";
 import Markdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import type { Layer, StackFile, TestChanges, Thread, ThreadAnchor } from "../src/shared/types.ts";
 import { DraftView, ThreadView, type ThreadActions } from "./Threads.tsx";
 
@@ -68,7 +69,7 @@ export function LayerView({ layer, index, total, diffStyle, threads, connected, 
 
       {layer.intro && (
         <div className="intro mb-4 max-w-3xl text-sm leading-relaxed text-neutral-700 dark:text-neutral-300">
-          <Markdown>{layer.intro}</Markdown>
+          <Markdown remarkPlugins={[remarkGfm]}>{layer.intro}</Markdown>
         </div>
       )}
 
