@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Stack, Workspace } from "../src/shared/types.ts";
-import { LayerView, type DiffStyle } from "./LayerView.tsx";
+import { ChangeCounts, LayerView, type DiffStyle } from "./LayerView.tsx";
 import { useThreads } from "./Threads.tsx";
 
 /** Whether the workspace's Claude Code session can take questions. Rechecked on focus, since rerunning `ummon` connects it. */
@@ -110,7 +110,7 @@ export function Review({ workspaceId }: { workspaceId: string }) {
 
   return (
     <div className="flex min-h-screen bg-neutral-50 text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100">
-      <aside className="sticky top-0 h-screen w-72 shrink-0 overflow-y-auto border-r border-neutral-200 p-4 dark:border-neutral-800">
+      <aside className="sticky top-0 h-screen w-60 shrink-0 overflow-y-auto border-r border-neutral-200 p-4 dark:border-neutral-800">
         <a href="/" className="text-lg font-semibold tracking-tight hover:underline">
           ummon
         </a>
@@ -120,6 +120,9 @@ export function Review({ workspaceId }: { workspaceId: string }) {
           {stack.branch ?? stack.headSha.slice(0, 12)}
         </div>
         <div className="font-mono text-xs text-neutral-500">from {stack.baseRef.slice(0, 40)}</div>
+        <div className="mt-1 text-xs">
+          <ChangeCounts files={stack.layers.flatMap((layer) => layer.files)} />
+        </div>
 
         <nav className="mt-6 space-y-1">
           {stack.layers.map((layer, index) => (
@@ -127,26 +130,27 @@ export function Review({ workspaceId }: { workspaceId: string }) {
               key={layer.sha ?? "uncommitted"}
               href={`#layer-${index + 1}`}
               aria-current={index === selected ? "page" : undefined}
-              className={`flex gap-2 rounded px-2 py-1.5 text-sm ${
+              className={`flex gap-2 rounded py-1.5 pl-1.5 pr-2 text-sm ${
                 index === selected
                   ? "bg-neutral-200 font-medium dark:bg-neutral-800"
                   : "hover:bg-neutral-200/60 dark:hover:bg-neutral-800/60"
               }`}
             >
-              <span className="w-5 shrink-0 text-right font-mono text-neutral-400">{index + 1}</span>
+              <span className="shrink-0 text-right font-mono text-neutral-400" style={{ width: `${String(stack.layers.length).length}ch` }}>
+                {index + 1}
+              </span>
               <span className="leading-snug">{layer.title}</span>
-              <ThreadCount count={threads.filter((t) => t.layerSha === layer.sha).length} />
             </a>
           ))}
         </nav>
 
-        <div className="mt-6 inline-flex overflow-hidden rounded border border-neutral-300 text-xs dark:border-neutral-700">
+        <div className="mt-6 flex overflow-hidden rounded border border-neutral-300 text-xs dark:border-neutral-700">
           {(["dynamic", "unified", "split"] as const).map((style) => (
             <button
               key={style}
               onClick={() => chooseDiffStyle(style)}
               title={style === "dynamic" ? "Split for files that replace blocks of lines, unified otherwise" : undefined}
-              className={`px-2 py-1 capitalize ${style === diffStyle ? "bg-neutral-200 font-medium dark:bg-neutral-800" : "text-neutral-500"}`}
+              className={`flex-1 px-2 py-1 capitalize ${style === diffStyle ? "bg-neutral-200 font-medium dark:bg-neutral-800" : "text-neutral-500"}`}
             >
               {style}
             </button>
@@ -160,7 +164,7 @@ export function Review({ workspaceId }: { workspaceId: string }) {
         {error && <div className="mt-4 text-xs text-red-600">{error}</div>}
       </aside>
 
-      <main className="min-w-0 flex-1 space-y-6 p-8">
+      <main className="min-w-0 flex-1 space-y-6 p-6">
         {stack.restackInProgress && (
           <div className="rounded border border-amber-400/50 bg-amber-100/50 px-4 py-2 text-sm dark:bg-amber-900/20">
             Restack in progress
@@ -188,13 +192,4 @@ export function Review({ workspaceId }: { workspaceId: string }) {
 /** The repo's directory name, which tells apart workspaces on the same branch in different repos. */
 export function repoName(path: string): string {
   return path.split("/").filter(Boolean).at(-1) ?? path;
-}
-
-function ThreadCount({ count }: { count: number }) {
-  if (count === 0) return null;
-  return (
-    <span className="ml-auto shrink-0 rounded-full bg-neutral-300 px-1.5 text-xs leading-5 dark:bg-neutral-700" title="Questions">
-      {count}
-    </span>
-  );
 }

@@ -59,10 +59,7 @@ export function LayerView({ layer, index, total, diffStyle, threads, connected, 
             Layer {index + 1} of {total}
           </span>
           {layer.sha && <code className="font-mono">{layer.sha.slice(0, 8)}</code>}
-          <span className="font-mono">
-            <span className="text-green-600">+{sum(layer.files, "additions")}</span>{" "}
-            <span className="text-red-600">−{sum(layer.files, "deletions")}</span>
-          </span>
+          <ChangeCounts files={layer.files} />
         </div>
         <h2 className="mt-1 text-xl font-semibold tracking-tight">{layer.title}</h2>
       </header>
@@ -300,4 +297,23 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
 
 function sum(files: StackFile[], key: "additions" | "deletions") {
   return files.reduce((total, file) => total + file[key], 0);
+}
+
+/** Lines added and removed, with source and tests counted separately. */
+export function ChangeCounts({ files }: { files: StackFile[] }) {
+  const groups = [
+    { label: "src", files: files.filter((file) => !file.isTest) },
+    { label: "test", files: files.filter((file) => file.isTest) },
+  ].filter((group) => group.files.length > 0);
+  return (
+    <span className="flex gap-3 font-mono">
+      {groups.map((group) => (
+        <span key={group.label}>
+          <span className="text-neutral-400">{group.label}</span>{" "}
+          <span className="text-green-600">+{sum(group.files, "additions")}</span>{" "}
+          <span className="text-red-600">−{sum(group.files, "deletions")}</span>
+        </span>
+      ))}
+    </span>
+  );
 }
