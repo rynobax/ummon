@@ -195,7 +195,7 @@ function headerPath(header: string): string {
 
 const TEST_PATTERNS = [
   /(^|\/)(__tests__|__mocks__|tests?|spec|specs|e2e|fixtures)\//,
-  /\.(test|spec|e2e)\.[^/]+$/,
+  /\.(test|spec|e2e|testUtils)\.[^/]+$/,
   /(^|\/)test_[^/]+\.py$/,
   /_test\.(go|py|rb|exs?)$/,
   /_spec\.rb$/,
