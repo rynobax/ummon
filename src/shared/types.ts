@@ -79,6 +79,11 @@ export interface Stack {
   baseRef: string;
   baseSha: string;
   headSha: string;
-  restackInProgress: boolean;
+  /**
+   * The branch's restack. "current" means the layers are the restacked
+   * commits followed by the branch's commits since; "stale" means the branch
+   * was rewritten after its restack, so the layers are its own commits.
+   */
+  restack: "in-progress" | "current" | "stale" | null;
   layers: Layer[];
 }

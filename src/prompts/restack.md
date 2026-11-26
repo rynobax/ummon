@@ -7,7 +7,7 @@ Rewrite the commits on `{{branch}}` into a sequence of layers that a reviewer wi
 - Base, where the stack starts: `{{base}}`
 - Original head, the exact final state you must reproduce: `{{head}}`
 - HEAD is detached at the base with a clean working tree. Build the new commits on top of it.
-- The original branch is untouched and backed up at `{{backupRef}}`.
+- The branch itself stays where it is. ummon saves your commits separately for the review, so nothing needs pushing.
 
 Start by understanding the whole change, including the intent behind it:
 

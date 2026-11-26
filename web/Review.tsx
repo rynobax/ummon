@@ -165,9 +165,9 @@ export function Review({ workspaceId }: { workspaceId: string }) {
       </aside>
 
       <main className="min-w-0 flex-1 space-y-6 p-6">
-        {stack.restackInProgress && (
+        {(stack.restack === "in-progress" || stack.restack === "stale") && (
           <div className="rounded border border-amber-400/50 bg-amber-100/50 px-4 py-2 text-sm dark:bg-amber-900/20">
-            Restack in progress
+            {stack.restack === "in-progress" ? "Restack in progress" : "Restack out of date"}
           </div>
         )}
         {current ? (

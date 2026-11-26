@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { git, gitMaybe } from "./git.ts";
-import { readRestackState } from "./restack.ts";
+import { layersRef, readRestackState, sourceRef } from "./restack.ts";
 import type { Layer, Stack, StackFile } from "./shared/types.ts";
 import { summarizeTests } from "./tests.ts";
 
@@ -75,53 +75,70 @@ async function findParentBranch(
 }
 
 export async function readStack(repo: string, baseOverride?: string): Promise<Stack> {
-  const restack = await readRestackState(repo);
-  // While a restack is in progress HEAD is detached at the new commits, so show
-  // those against the recorded base. That lets the page watch the restack happen.
-  const range: Range = restack
-    ? {
-        repo,
-        branch: restack.branch,
-        baseRef: restack.base,
-        baseSha: restack.base,
-        headSha: (await git(repo, ["rev-parse", "HEAD"])).trim(),
-      }
-    : await resolveRange(repo, baseOverride);
-
-  const shas = (await git(repo, ["rev-list", "--reverse", "--first-parent", `${range.baseSha}..${range.headSha}`]))
-    .split("\n")
-    .filter(Boolean);
-
-  const layers: Layer[] = [];
-  for (const sha of shas) layers.push(await commitLayer(repo, sha));
-
-  if (!restack) {
-    const files = await uncommittedChanges(repo);
-    if (files.length > 0) {
-      layers.push({ sha: null, kind: "uncommitted", title: "Uncommitted changes", intro: "", files });
-    }
+  const inProgress = await readRestackState(repo);
+  if (inProgress) {
+    // HEAD is detached at the new commits, so show those against the recorded
+    // base. That lets the page watch the restack happen.
+    const headSha = (await git(repo, ["rev-parse", "HEAD"])).trim();
+    const range: Range = { repo, branch: inProgress.branch, baseRef: inProgress.base, baseSha: inProgress.base, headSha };
+    return { ...range, restack: "in-progress", layers: await commitLayers(repo, range.baseSha, headSha) };
   }
 
-  return { ...range, restackInProgress: restack !== null, layers };
+  const range = await resolveRange(repo, baseOverride);
+  const restack = range.branch ? await findRestack(repo, range) : null;
+  const layers =
+    restack?.status === "current"
+      ? // The layers' tip has the same tree as the source, so the branch's
+        // commits since the source follow on from the layers.
+        [...(await commitLayers(repo, range.baseSha, restack.layers)), ...(await commitLayers(repo, restack.source, range.headSha))]
+      : await commitLayers(repo, range.baseSha, range.headSha);
+
+  const files = await uncommittedChanges(repo);
+  if (files.length > 0) {
+    layers.push({ sha: null, kind: "uncommitted", title: "Uncommitted changes", intro: "", files });
+  }
+  return { ...range, restack: restack?.status ?? null, layers };
+}
+
+/**
+ * The branch's saved restack, if it has one. It's stale once the branch no
+ * longer contains the commit it was built from, or the layers no longer build
+ * on the base, such as after a rebase.
+ */
+async function findRestack(repo: string, range: Range) {
+  const layers = await gitMaybe(repo, ["rev-parse", "--verify", "-q", `${layersRef(range.branch!)}^{commit}`]);
+  const source = await gitMaybe(repo, ["rev-parse", "--verify", "-q", `${sourceRef(range.branch!)}^{commit}`]);
+  if (!layers || !source) return null;
+  const current =
+    (await gitMaybe(repo, ["merge-base", "--is-ancestor", source, range.headSha])) !== null &&
+    (await gitMaybe(repo, ["merge-base", "--is-ancestor", range.baseSha, layers])) !== null;
+  return { layers, source, status: current ? ("current" as const) : ("stale" as const) };
+}
+
+async function commitLayers(repo: string, from: string, to: string): Promise<Layer[]> {
+  const shas = (await git(repo, ["rev-list", "--reverse", "--first-parent", `${from}..${to}`])).split("\n").filter(Boolean);
+  const layers: Layer[] = [];
+  for (const sha of shas) layers.push(await commitLayer(repo, sha));
+  return layers;
 }
 
 /**
  * A commit's layer never changes, so each is built once. That keeps the page's
  * polling cheap: only the uncommitted changes are diffed every time.
  */
-const commitLayers = new Map<string, Layer>();
+const layerCache = new Map<string, Layer>();
 const MAX_CACHED_LAYERS = 5000;
 
 async function commitLayer(repo: string, sha: string): Promise<Layer> {
-  const cached = commitLayers.get(sha);
+  const cached = layerCache.get(sha);
   if (cached) return cached;
   const meta = await git(repo, ["show", "-s", "--format=%s%x00%b", sha]);
   const [title, intro = ""] = meta.split("\0");
   const patch = await git(repo, ["diff", "-M", "--no-color", "--no-ext-diff", `${sha}^1`, sha]);
   const files = await withTestSummaries(repo, splitPatch(patch), `${sha}^1`, sha);
   const layer: Layer = { sha, kind: "commit", title: title.trim(), intro: intro.trim(), files };
-  if (commitLayers.size >= MAX_CACHED_LAYERS) commitLayers.clear();
-  commitLayers.set(sha, layer);
+  if (layerCache.size >= MAX_CACHED_LAYERS) layerCache.clear();
+  layerCache.set(sha, layer);
   return layer;
 }
 

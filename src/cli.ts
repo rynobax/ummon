@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 import { restackWithAgent } from "./agent.ts";
-import { abortRestack, beginRestack, finishRestack, restackGuide } from "./restack.ts";
+import { abortRestack, adoptRestack, beginRestack, finishRestack, restackGuide, type RestackState } from "./restack.ts";
 import { ensureServer, install, isInstalled, registerWorkspace, replyToThread, stopServer, uninstall } from "./daemon.ts";
 import { DEFAULT_PORT, runServer } from "./server.ts";
 import { resolveRepo } from "./stack.ts";
@@ -12,10 +12,11 @@ const HELP = `ummon: layered code review
 
 Usage:
   ummon [--base <ref>] [--no-open]                Review the current branch in the browser
-  ummon restack [--base <ref>]                    Have an agent restack the current branch in place
+  ummon restack [--base <ref>]                    Have an agent restack the current branch for review
   ummon restack begin [--base <ref>]              Start a manual restack and print the guide
-  ummon restack finish                            Verify a manual restack and move the branch
-  ummon restack abort                             Abandon a restack and restore the branch
+  ummon restack finish                            Verify a manual restack and save it
+  ummon restack abort                             Abandon a restack and return to the branch
+  ummon restack adopt                             Move the branch onto its restacked commits
   ummon reply <thread>                            Answer a reviewer's question, reading markdown from stdin
   ummon guide                                     Print the review workflow for a coding agent
   ummon install                                   Run the ummon server with launchd (macOS)
@@ -30,8 +31,10 @@ asked on the diff are sent to it. That needs a server outside the session's
 sandbox: run \`ummon install\` once in your own terminal.
 The base defaults to the branch this one is stacked on, if any, otherwise the
 merge-base with origin/HEAD (or main/master).
-Every restack backs up the original head under refs/ummon/backup/. Backups of
-branches that no longer exist are deleted at the start of the next restack.`;
+A restack never changes the branch. It's saved under refs/ummon/stack/<branch>/,
+and the review shows it followed by any commits made on the branch since. Only
+\`ummon restack adopt\` moves the branch. Restacks of branches that no longer
+exist are deleted at the start of the next restack.`;
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -109,9 +112,9 @@ async function main() {
   if (command === "restack") {
     if (subcommand === undefined) {
       const state = await beginRestack(repo, values.base);
-      console.error(`Restacking ${state.branch} (backup at ${state.backupRef})`);
+      console.error(`Restacking ${state.branch}`);
       const ok = await restackWithAgent(repo, state);
-      if (ok) console.log(`Restacked ${state.branch}. Undo with: git reset --hard ${state.backupRef}`);
+      if (ok) console.log(restacked(state));
       process.exitCode = ok ? 0 : 1;
       return;
     }
@@ -126,16 +129,25 @@ async function main() {
         process.exitCode = 1;
         return;
       }
-      return console.log(`Restacked ${result.state.branch}. Undo with: git reset --hard ${result.state.backupRef}`);
+      return console.log(restacked(result.state));
     }
     if (subcommand === "abort") {
       const state = await abortRestack(repo);
-      return console.log(`Restored ${state.branch} to ${state.origHead.slice(0, 12)}.`);
+      return console.log(`Abandoned the restack and switched back to ${state.branch}.`);
+    }
+    if (subcommand === "adopt") {
+      const { branch, replayed } = await adoptRestack(repo);
+      const since = replayed > 0 ? `, with the ${replayed} commit${replayed === 1 ? "" : "s"} made since on top` : "";
+      return console.log(`Moved ${branch} onto its restacked commits${since}. Push with --force-with-lease to update its PR.`);
     }
   }
 
   console.error(HELP);
   process.exitCode = 1;
+}
+
+function restacked(state: RestackState): string {
+  return `Restacked ${state.branch} for review. The branch itself is unchanged, so there's nothing to push.`;
 }
 
 main().catch((error) => {
